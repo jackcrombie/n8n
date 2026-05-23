@@ -1,0 +1,89 @@
+{
+	"project": {
+		"projectId": "b021e7cb-1903-4292-b48b-5b27b4271e3e",
+		"contactId": "216830cb-9a68-487e-928b-c1a7ccc4fc81",
+		"name": "Remodeling 2012",
+		"currencyCode": "AUD",
+		"status": "INPROGRESS"
+	},
+	"projectsPage": {
+		"pagination": {
+			"page": 1,
+			"pageSize": 50,
+			"pageCount": 1,
+			"itemCount": 1
+		},
+		"items": [
+			{
+				"projectId": "b021e7cb-1903-4292-b48b-5b27b4271e3e",
+				"contactId": "216830cb-9a68-487e-928b-c1a7ccc4fc81",
+				"name": "Remodeling 2012",
+				"currencyCode": "AUD",
+				"status": "INPROGRESS"
+			}
+		]
+	},
+	"task": {
+		"taskId": "7be77337-feec-4458-bb1b-dbaa5a4aafce",
+		"projectId": "b021e7cb-1903-4292-b48b-5b27b4271e3e",
+		"name": "Demolition",
+		"chargeType": "TIME",
+		"status": "ACTIVE"
+	},
+	"tasksPage": {
+		"pagination": {
+			"page": 1,
+			"pageSize": 50,
+			"pageCount": 1,
+			"itemCount": 1
+		},
+		"items": [
+			{
+				"taskId": "7be77337-feec-4458-bb1b-dbaa5a4aafce",
+				"projectId": "b021e7cb-1903-4292-b48b-5b27b4271e3e",
+				"name": "Demolition",
+				"chargeType": "TIME",
+				"status": "ACTIVE"
+			}
+		]
+	},
+	"timeEntry": {
+		"timeEntryId": "3cd35eca-704f-4bca-b258-236028ae8ed1",
+		"userId": "740add2a-a703-4b8a-a670-1093919c2040",
+		"projectId": "b021e7cb-1903-4292-b48b-5b27b4271e3e",
+		"taskId": "7be77337-feec-4458-bb1b-dbaa5a4aafce",
+		"dateUtc": "2020-02-27T15:00:00Z",
+		"duration": 45,
+		"description": "My description",
+		"status": "ACTIVE"
+	},
+	"timeEntriesPage": {
+		"pagination": {
+			"page": 1,
+			"pageSize": 50,
+			"pageCount": 1,
+			"itemCount": 1
+		},
+		"items": [
+			{
+				"timeEntryId": "3cd35eca-704f-4bca-b258-236028ae8ed1",
+				"userId": "740add2a-a703-4b8a-a670-1093919c2040",
+				"projectId": "b021e7cb-1903-4292-b48b-5b27b4271e3e",
+				"taskId": "7be77337-feec-4458-bb1b-dbaa5a4aafce",
+				"dateUtc": "2020-02-27T15:00:00Z",
+				"duration": 45,
+				"description": "My description",
+				"status": "ACTIVE"
+			}
+		]
+	},
+	"emptyPage": {
+		"pagination": {
+			"page": 2,
+			"pageSize": 50,
+			"pageCount": 1,
+			"itemCount": 1
+		},
+		"items": []
+	}
+}

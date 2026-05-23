@@ -9,6 +9,14 @@ const scopes = [
 	'accounting.attachments',
 	'accounting.settings',
 	'accounting.contacts',
+	// Projects, Files, and Assets require enabling these scopes on your Xero app
+	// in the Developer Portal before connecting.
+	'projects.read',
+	'files',
+	'assets',
+	// finance.statements.read is restricted to Xero financial partners and will
+	// cause invalid_scope for standard apps. Finance API support will use
+	// accounting.reports.read instead where possible.
 ];
 
 export class XeroOAuth2Api implements ICredentialType {
