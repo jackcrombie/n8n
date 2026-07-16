@@ -13,11 +13,11 @@ describe('FrameIoTriggerHelpers', () => {
 	}
 
 	beforeEach(() => {
-		jest.spyOn(Date, 'now').mockReturnValue(1700000000 * 1000);
+		vi.spyOn(Date, 'now').mockReturnValue(1700000000 * 1000);
 	});
 
 	afterEach(() => {
-		jest.restoreAllMocks();
+		vi.restoreAllMocks();
 	});
 
 	it('should verify a valid signature', () => {

@@ -10,6 +10,7 @@ import type {
 import { NodeApiError, NodeConnectionTypes } from 'n8n-workflow';
 
 import { frameIoTriggerProperties } from '../descriptions/TriggerDescription';
+import { FRAME_IO_ALL_EVENTS, resolveFrameIoWebhookEvents } from '../constants';
 import { frameIoApiRequest, invalidateCacheFromWebhook } from '../GenericFunctions';
 import type { FrameIoWebhookPayload } from '../types';
 import { verifyFrameIoWebhook } from '../FrameIoTriggerHelpers';
@@ -86,7 +87,7 @@ export class FrameIoTriggerV1 implements INodeType {
 				const webhookData = this.getWorkflowStaticData('node');
 				const accountId = this.getNodeParameter('accountId') as string;
 				const workspaceId = this.getNodeParameter('workspaceId') as string;
-				const events = this.getNodeParameter('events') as string[];
+				const events = resolveFrameIoWebhookEvents(this.getNodeParameter('events') as string[]);
 				const webhookUrl = this.getNodeWebhookUrl('default');
 				const workflow = this.getWorkflow();
 
@@ -155,7 +156,8 @@ export class FrameIoTriggerV1 implements INodeType {
 			return {};
 		}
 
-		if (!subscribedEvents.includes(body.type)) {
+		const catchAll = subscribedEvents.includes(FRAME_IO_ALL_EVENTS);
+		if (!catchAll && !subscribedEvents.includes(body.type)) {
 			return {};
 		}
 

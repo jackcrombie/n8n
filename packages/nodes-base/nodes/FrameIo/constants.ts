@@ -4,6 +4,8 @@ export const FRAME_IO_CREDENTIAL = 'frameIoOAuth2Api';
 
 export const DEFAULT_CACHE_TTL_MS = 15 * 60 * 1000;
 
+export const FRAME_IO_ALL_EVENTS = '*';
+
 export const FRAME_IO_WEBHOOK_EVENTS = [
 	{ name: 'Project Created', value: 'project.created' },
 	{ name: 'Project Updated', value: 'project.updated' },
@@ -36,6 +38,15 @@ export const FRAME_IO_WEBHOOK_EVENTS = [
 	{ name: 'Share Deleted', value: 'share.deleted' },
 	{ name: 'Share Viewed', value: 'share.viewed' },
 ] as const;
+
+export const FRAME_IO_WEBHOOK_EVENT_VALUES = FRAME_IO_WEBHOOK_EVENTS.map((event) => event.value);
+
+export function resolveFrameIoWebhookEvents(events: string[]): string[] {
+	if (events.includes(FRAME_IO_ALL_EVENTS)) {
+		return [...FRAME_IO_WEBHOOK_EVENT_VALUES];
+	}
+	return events;
+}
 
 export const MEDIA_LINK_INCLUDE_MAP: Record<string, string> = {
 	thumbnail: 'media_links.thumbnail',

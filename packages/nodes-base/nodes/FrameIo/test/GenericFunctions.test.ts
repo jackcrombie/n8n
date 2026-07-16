@@ -61,9 +61,9 @@ describe('FrameIo GenericFunctions', () => {
 	describe('frameIoApiRequest', () => {
 		it('should retry on 429 responses', async () => {
 			const mockThis = {
-				getNode: jest.fn().mockReturnValue({ name: 'Frame.io' }),
+				getNode: vi.fn().mockReturnValue({ name: 'Frame.io' }),
 				helpers: {
-					httpRequestWithAuthentication: jest
+					httpRequestWithAuthentication: vi
 						.fn()
 						.mockRejectedValueOnce({ statusCode: 429 })
 						.mockResolvedValueOnce({ data: { id: 'ok' } }),
@@ -79,9 +79,9 @@ describe('FrameIo GenericFunctions', () => {
 	describe('enrichEventPayload', () => {
 		it('should skip enrichment for delete events by default', async () => {
 			const mockThis = {
-				getNode: jest.fn().mockReturnValue({ name: 'Frame.io Enrich' }),
+				getNode: vi.fn().mockReturnValue({ name: 'Frame.io Enrich' }),
 				helpers: {
-					httpRequestWithAuthentication: jest.fn(),
+					httpRequestWithAuthentication: vi.fn(),
 				},
 			} as unknown as IExecuteFunctions;
 
@@ -101,9 +101,9 @@ describe('FrameIo GenericFunctions', () => {
 
 		it('should enrich file events with creator include', async () => {
 			const mockThis = {
-				getNode: jest.fn().mockReturnValue({ name: 'Frame.io Enrich' }),
+				getNode: vi.fn().mockReturnValue({ name: 'Frame.io Enrich' }),
 				helpers: {
-					httpRequestWithAuthentication: jest.fn().mockResolvedValue({
+					httpRequestWithAuthentication: vi.fn().mockResolvedValue({
 						data: {
 							id: 'file-1',
 							name: 'clip.mov',

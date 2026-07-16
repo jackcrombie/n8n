@@ -1,6 +1,6 @@
 import type { INodeProperties } from 'n8n-workflow';
 
-import { FRAME_IO_WEBHOOK_EVENTS } from '../constants';
+import { FRAME_IO_ALL_EVENTS, FRAME_IO_WEBHOOK_EVENTS } from '../constants';
 
 export const frameIoTriggerProperties: INodeProperties[] = [
 	{
@@ -19,7 +19,7 @@ export const frameIoTriggerProperties: INodeProperties[] = [
 	},
 	{
 		displayName:
-			'Subscribe to fewer events per webhook when possible. Frame.io recommends splitting webhooks by logical concern.',
+			'Use All Events for a generic catch-all webhook, then route with Frame.io Filter. Prefer fewer events when a workflow only cares about one concern.',
 		name: 'eventsNotice',
 		type: 'notice',
 		default: '',
@@ -54,11 +54,19 @@ export const frameIoTriggerProperties: INodeProperties[] = [
 		name: 'events',
 		type: 'multiOptions',
 		required: true,
-		default: [],
-		options: FRAME_IO_WEBHOOK_EVENTS.map((event) => ({
-			name: event.name,
-			value: event.value,
-		})),
-		description: 'The events to subscribe to at Frame.io',
+		default: [FRAME_IO_ALL_EVENTS],
+		options: [
+			{
+				name: 'All Events',
+				value: FRAME_IO_ALL_EVENTS,
+				description: 'Catch every Frame.io event and pass it downstream',
+			},
+			...FRAME_IO_WEBHOOK_EVENTS.map((event) => ({
+				name: event.name,
+				value: event.value,
+			})),
+		],
+		description:
+			'Events to subscribe to. Choose All Events for a generic webhook that forwards everything.',
 	},
 ];
