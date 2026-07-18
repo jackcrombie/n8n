@@ -7,12 +7,55 @@ import {
 	eventMatchesPattern,
 	frameIoApiRequest,
 	getCachedResource,
+	getFrameIoResourceLabel,
 	invalidateCacheFromWebhook,
 	setCachedResource,
+	toFrameIoResourceOption,
 } from '../GenericFunctions';
 import type { FrameIoWebhookPayload } from '../types';
 
 describe('FrameIo GenericFunctions', () => {
+	describe('toFrameIoResourceOption', () => {
+		it('should use display_name for accounts and show id as description', () => {
+			expect(
+				toFrameIoResourceOption({ id: 'account-1', display_name: 'Integration Account' }, [
+					'display_name',
+					'name',
+				]),
+			).toEqual({
+				name: 'Integration Account',
+				value: 'account-1',
+				description: 'account-1',
+			});
+		});
+
+		it('should use name for workspaces and projects', () => {
+			expect(toFrameIoResourceOption({ id: 'workspace-1', name: 'My Workspace' })).toEqual({
+				name: 'My Workspace',
+				value: 'workspace-1',
+				description: 'workspace-1',
+			});
+		});
+
+		it('should fall back to id when no label is available', () => {
+			expect(toFrameIoResourceOption({ id: 'account-1' }, ['display_name', 'name'])).toEqual({
+				name: 'account-1',
+				value: 'account-1',
+			});
+		});
+	});
+
+	describe('getFrameIoResourceLabel', () => {
+		it('should prefer display_name over name', () => {
+			expect(
+				getFrameIoResourceLabel({
+					display_name: 'Account Label',
+					name: 'Legacy Name',
+				}),
+			).toBe('Account Label');
+		});
+	});
+
 	describe('buildIncludeParam', () => {
 		it('should join unique include values', () => {
 			expect(buildIncludeParam(['project', 'creator', 'project'])).toBe('project,creator');

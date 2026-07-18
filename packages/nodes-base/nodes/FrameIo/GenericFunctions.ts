@@ -5,6 +5,7 @@ import type {
 	IHttpRequestMethods,
 	IHttpRequestOptions,
 	ILoadOptionsFunctions,
+	INodePropertyOptions,
 	IWebhookFunctions,
 	JsonObject,
 } from 'n8n-workflow';
@@ -25,6 +26,35 @@ type FrameIoRequestContext =
 	| IWebhookFunctions;
 
 const sleep = async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms));
+
+const DEFAULT_RESOURCE_LABEL_FIELDS = ['display_name', 'name', 'title'] as const;
+
+export function getFrameIoResourceLabel(
+	resource: IDataObject,
+	labelFields: readonly string[] = DEFAULT_RESOURCE_LABEL_FIELDS,
+): string | undefined {
+	for (const field of labelFields) {
+		const value = resource[field];
+		if (typeof value === 'string' && value.trim().length > 0) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+export function toFrameIoResourceOption(
+	resource: IDataObject,
+	labelFields: readonly string[] = DEFAULT_RESOURCE_LABEL_FIELDS,
+): INodePropertyOptions {
+	const id = resource.id as string;
+	const label = getFrameIoResourceLabel(resource, labelFields);
+
+	return {
+		name: label ?? id,
+		value: id,
+		...(label && label !== id ? { description: id } : {}),
+	};
+}
 
 export function buildIncludeParam(includes: string[]): string | undefined {
 	const unique = [...new Set(includes.filter(Boolean))];

@@ -5,15 +5,19 @@ import type {
 	INodePropertyOptions,
 } from 'n8n-workflow';
 
-import { frameIoApiRequest, frameIoApiRequestAllItems } from './GenericFunctions';
+import {
+	frameIoApiRequest,
+	frameIoApiRequestAllItems,
+	getFrameIoResourceLabel,
+	toFrameIoResourceOption,
+} from './GenericFunctions';
+
+const ACCOUNT_LABEL_FIELDS = ['display_name', 'name'] as const;
 
 export async function getAccounts(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 	const response = await frameIoApiRequest.call(this, 'GET', '/v4/accounts');
 	const accounts = (response.data as IDataObject[]) ?? [];
-	return accounts.map((account) => ({
-		name: (account.name as string) ?? (account.id as string),
-		value: account.id as string,
-	}));
+	return accounts.map((account) => toFrameIoResourceOption(account, ACCOUNT_LABEL_FIELDS));
 }
 
 export async function getWorkspaces(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
@@ -25,10 +29,7 @@ export async function getWorkspaces(this: ILoadOptionsFunctions): Promise<INodeP
 		'GET',
 		`/v4/accounts/${accountId}/workspaces`,
 	);
-	return workspaces.map((workspace) => ({
-		name: (workspace.name as string) ?? (workspace.id as string),
-		value: workspace.id as string,
-	}));
+	return workspaces.map((workspace) => toFrameIoResourceOption(workspace));
 }
 
 export async function getProjects(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
@@ -41,10 +42,7 @@ export async function getProjects(this: ILoadOptionsFunctions): Promise<INodePro
 		'GET',
 		`/v4/accounts/${accountId}/workspaces/${workspaceId}/projects`,
 	);
-	return projects.map((project) => ({
-		name: (project.name as string) ?? (project.id as string),
-		value: project.id as string,
-	}));
+	return projects.map((project) => toFrameIoResourceOption(project));
 }
 
 export async function getShares(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
@@ -57,10 +55,7 @@ export async function getShares(this: ILoadOptionsFunctions): Promise<INodePrope
 		'GET',
 		`/v4/accounts/${accountId}/projects/${projectId}/shares`,
 	);
-	return shares.map((share) => ({
-		name: (share.name as string) ?? (share.id as string),
-		value: share.id as string,
-	}));
+	return shares.map((share) => toFrameIoResourceOption(share));
 }
 
 export async function searchShares(
@@ -80,15 +75,8 @@ export async function searchShares(
 	);
 
 	const results = shares
-		.filter((share) => {
-			if (!filter) return true;
-			const name = (share.name as string) ?? '';
-			return name.toLowerCase().includes(filter.toLowerCase());
-		})
-		.map((share) => ({
-			name: (share.name as string) ?? (share.id as string),
-			value: share.id as string,
-		}));
+		.filter((share) => matchesResourceFilter(share, filter))
+		.map((share) => toFrameIoResourceOption(share));
 
 	return { results };
 }
@@ -107,6 +95,12 @@ export async function searchFiles(
 ): Promise<INodeListSearchResult> {
 	const options = await searchFileOptions.call(this, filter);
 	return { results: options };
+}
+
+function matchesResourceFilter(resource: IDataObject, filter?: string): boolean {
+	if (!filter) return true;
+	const label = getFrameIoResourceLabel(resource);
+	return (label ?? '').toLowerCase().includes(filter.toLowerCase());
 }
 
 async function searchFolderOptions(
@@ -133,15 +127,8 @@ async function searchFolderOptions(
 	);
 
 	return folders
-		.filter((folder) => {
-			if (!filter) return true;
-			const name = (folder.name as string) ?? '';
-			return name.toLowerCase().includes(filter.toLowerCase());
-		})
-		.map((folder) => ({
-			name: (folder.name as string) ?? (folder.id as string),
-			value: folder.id as string,
-		}));
+		.filter((folder) => matchesResourceFilter(folder, filter))
+		.map((folder) => toFrameIoResourceOption(folder));
 }
 
 async function searchFileOptions(
@@ -168,13 +155,6 @@ async function searchFileOptions(
 	);
 
 	return files
-		.filter((file) => {
-			if (!filter) return true;
-			const name = (file.name as string) ?? '';
-			return name.toLowerCase().includes(filter.toLowerCase());
-		})
-		.map((file) => ({
-			name: (file.name as string) ?? (file.id as string),
-			value: file.id as string,
-		}));
+		.filter((file) => matchesResourceFilter(file, filter))
+		.map((file) => toFrameIoResourceOption(file));
 }
