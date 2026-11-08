@@ -1,15 +1,11 @@
 import type { IExecuteFunctions } from 'n8n-workflow';
 
 import {
-	buildCacheKey,
 	buildIncludeParam,
 	enrichEventPayload,
 	eventMatchesPattern,
 	frameIoApiRequest,
-	getCachedResource,
 	getFrameIoResourceLabel,
-	invalidateCacheFromWebhook,
-	setCachedResource,
 	toFrameIoResourceOption,
 } from '../GenericFunctions';
 import type { FrameIoWebhookPayload } from '../types';
@@ -25,6 +21,7 @@ describe('FrameIo GenericFunctions', () => {
 			).toEqual({
 				name: 'Integration Account',
 				value: 'account-1',
+				// eslint-disable-next-line n8n-nodes-base/node-param-description-lowercase-first-char -- test data, not a node param
 				description: 'account-1',
 			});
 		});
@@ -33,6 +30,7 @@ describe('FrameIo GenericFunctions', () => {
 			expect(toFrameIoResourceOption({ id: 'workspace-1', name: 'My Workspace' })).toEqual({
 				name: 'My Workspace',
 				value: 'workspace-1',
+				// eslint-disable-next-line n8n-nodes-base/node-param-description-lowercase-first-char -- test data, not a node param
 				description: 'workspace-1',
 			});
 		});
@@ -74,30 +72,6 @@ describe('FrameIo GenericFunctions', () => {
 		it('should match wildcard prefixes', () => {
 			expect(eventMatchesPattern('file.ready', ['file.*'])).toBe(true);
 			expect(eventMatchesPattern('comment.created', ['file.*'])).toBe(false);
-		});
-	});
-
-	describe('cache helpers', () => {
-		const staticData: { frameIoResourceCache?: { entries?: Record<string, unknown> } } = {};
-
-		it('should store and retrieve cached resources within TTL', () => {
-			const key = buildCacheKey('account-1', 'GET', '/v4/files/1', 'project');
-			setCachedResource(staticData, key, { id: '1', name: 'Clip' });
-			expect(getCachedResource(staticData, key)).toEqual({ id: '1', name: 'Clip' });
-		});
-
-		it('should invalidate cache entries from webhook payload', () => {
-			const key = buildCacheKey('account-1', 'GET', '/v4/files/file-1', '');
-			setCachedResource(staticData, key, { id: 'file-1' });
-
-			const payload = {
-				type: 'file.updated',
-				resource: { id: 'file-1', type: 'file' },
-				project: { id: 'project-1' },
-			} as FrameIoWebhookPayload;
-
-			invalidateCacheFromWebhook(staticData, payload);
-			expect(getCachedResource(staticData, key)).toBeUndefined();
 		});
 	});
 
@@ -170,6 +144,66 @@ describe('FrameIo GenericFunctions', () => {
 				creator: { name: 'Jane', email: 'jane@example.com' },
 			});
 			expect(result.user_data).toEqual({ name: 'Jane', email: 'jane@example.com' });
+		});
+
+		it('should not send file-only includes on comment enrichment', async () => {
+			const mockThis = {
+				getNode: vi.fn().mockReturnValue({ name: 'Frame.io Enrich' }),
+				helpers: {
+					httpRequestWithAuthentication: vi
+						.fn()
+						.mockResolvedValueOnce({
+							data: {
+								id: 'comment-1',
+								file_id: 'file-1',
+								owner: { name: 'Jane', email: 'jane@example.com' },
+							},
+						})
+						.mockResolvedValueOnce({
+							data: {
+								id: 'file-1',
+								name: 'clip.mov',
+								media_links: { thumbnail: { url: 'https://example.com/thumb.jpg' } },
+							},
+						}),
+				},
+			} as unknown as IExecuteFunctions;
+
+			const payload = {
+				type: 'comment.created',
+				account: { id: 'account-1' },
+				resource: { id: 'comment-1', type: 'comment' },
+			} as FrameIoWebhookPayload;
+
+			const result = await enrichEventPayload.call(
+				mockThis,
+				payload,
+				['resource', 'actor', 'metadata', 'mediaLinks'],
+				{ mediaLinks: ['thumbnail'] },
+			);
+
+			expect(mockThis.helpers.httpRequestWithAuthentication).toHaveBeenNthCalledWith(
+				1,
+				'frameIoOAuth2Api',
+				expect.objectContaining({
+					url: 'https://api.frame.io/v4/accounts/account-1/comments/comment-1',
+					qs: { include: 'owner' },
+				}),
+			);
+			expect(mockThis.helpers.httpRequestWithAuthentication).toHaveBeenNthCalledWith(
+				2,
+				'frameIoOAuth2Api',
+				expect.objectContaining({
+					url: 'https://api.frame.io/v4/accounts/account-1/files/file-1',
+					qs: { include: 'metadata,media_links.thumbnail' },
+				}),
+			);
+			expect(result.user_data).toEqual({ name: 'Jane', email: 'jane@example.com' });
+			expect(result.file_data).toEqual({
+				id: 'file-1',
+				name: 'clip.mov',
+				media_links: { thumbnail: { url: 'https://example.com/thumb.jpg' } },
+			});
 		});
 	});
 });

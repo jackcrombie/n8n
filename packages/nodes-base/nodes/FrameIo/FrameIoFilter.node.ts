@@ -1,22 +1,28 @@
+import { NodeConnectionTypes } from 'n8n-workflow';
 import type {
 	IDataObject,
 	IExecuteFunctions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
+	INodeParameters,
 } from 'n8n-workflow';
-import { NodeConnectionTypes } from 'n8n-workflow';
 
 import {
 	type FrameIoFilterRoute,
+	isShareFolderScope,
 	routeMatchesEvent,
 	routeMatchesProject,
 	routeMatchesResourceScope,
 	frameIoFilterEventOptions,
 } from './FrameIoFilterHelpers';
-import type { INodeParameters } from 'n8n-workflow';
-import { extractResourceLocatorValue, isResourceInFolderScope } from './GenericFunctions';
-import type { FrameIoWebhookPayload } from './types';
+import {
+	createLookupCache,
+	extractResourceLocatorValue,
+	type FrameIoLookupCache,
+	isResourceInFolderScope,
+	isResourceInShare,
+} from './GenericFunctions';
 import {
 	getAccounts,
 	getProjects,
@@ -24,8 +30,33 @@ import {
 	getWorkspaces,
 	searchFiles,
 	searchFolders,
+	searchShareFolders,
 	searchShares,
 } from './LoadOptionsMethods';
+import type { FrameIoWebhookPayload } from './types';
+
+async function isInShareFolder(
+	this: IExecuteFunctions,
+	accountId: string,
+	payload: FrameIoWebhookPayload,
+	route: FrameIoFilterRoute,
+	lookupCache: FrameIoLookupCache,
+): Promise<boolean> {
+	const shareFolderId = extractResourceLocatorValue(route.shareFolder);
+	// No folder picked yet: fall back to the whole share.
+	if (!shareFolderId) {
+		const shareId = extractResourceLocatorValue(route.share) ?? '';
+		return await isResourceInShare.call(this, accountId, payload, shareId, lookupCache);
+	}
+	return await isResourceInFolderScope.call(
+		this,
+		accountId,
+		payload,
+		shareFolderId,
+		route.shareScope === 'folder_in_share_subtree' ? 'subtree' : 'exact',
+		lookupCache,
+	);
+}
 
 const configuredFilterOutputs = (parameters: INodeParameters) => {
 	const routes = (parameters.routes as IDataObject)?.route as FrameIoFilterRoute[] | undefined;
@@ -92,7 +123,7 @@ export class FrameIoFilter implements INodeType {
 					loadOptionsMethod: 'getProjects',
 				},
 				description:
-					'Used for browsing folders, files, and shares. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+					'Used for browsing folders, files, and shares. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 			},
 			{
 				displayName: 'Routes',
@@ -136,10 +167,10 @@ export class FrameIoFilter implements INodeType {
 								options: frameIoFilterEventOptions,
 								default: [],
 								description:
-									'Events that should be routed to this output. Supports patterns like file.*',
+									'Events that should be routed to this output. Supports patterns like file.*.',
 							},
 							{
-								displayName: 'Limit to Project',
+								displayName: 'Limit to Project Name or ID',
 								name: 'projectId',
 								type: 'options',
 								default: '',
@@ -147,7 +178,8 @@ export class FrameIoFilter implements INodeType {
 									loadOptionsDependsOn: ['accountId', 'workspaceId'],
 									loadOptionsMethod: 'getProjects',
 								},
-								description: 'If set, only events from this project are routed here',
+								description:
+									'If set, only events from this project are routed here. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 							},
 							{
 								displayName: 'Scope Type',
@@ -296,7 +328,7 @@ export class FrameIoFilter implements INodeType {
 										name: 'list',
 										type: 'list',
 										typeOptions: {
-											searchListMethod: 'searchFolders',
+											searchListMethod: 'searchShareFolders',
 											searchable: true,
 										},
 									},
@@ -325,6 +357,7 @@ export class FrameIoFilter implements INodeType {
 			searchFolders,
 			searchFiles,
 			searchShares,
+			searchShareFolders,
 		},
 	};
 
@@ -334,47 +367,62 @@ export class FrameIoFilter implements INodeType {
 		const accountId = this.getNodeParameter('accountId', 0) as string;
 
 		const returnData: INodeExecutionData[][] = routes.map(() => []);
+		// Per-execution only: routing must not act on folder data that may have moved.
+		const lookupCache = createLookupCache();
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			const item = items[itemIndex];
 			const payload = item.json as FrameIoWebhookPayload;
 
-			for (let routeIndex = 0; routeIndex < routes.length; routeIndex++) {
-				const route = routes[routeIndex];
+			try {
+				const matchedRoutes: number[] = [];
+				for (let routeIndex = 0; routeIndex < routes.length; routeIndex++) {
+					const route = routes[routeIndex];
 
-				if (!routeMatchesEvent(route, payload.type)) continue;
-				if (!routeMatchesProject(route, payload)) continue;
-				if (!routeMatchesResourceScope(route, payload)) continue;
+					if (!routeMatchesEvent(route, payload.type)) continue;
+					if (!routeMatchesProject(route, payload)) continue;
+					if (!routeMatchesResourceScope(route, payload)) continue;
 
-				if (route.scopeType === 'folder') {
-					const folderId = extractResourceLocatorValue(route.folder);
-					if (folderId) {
-						const inScope = await isResourceInFolderScope.call(
-							this,
-							accountId,
-							payload,
-							folderId,
-							route.folderScope ?? 'subtree',
-						);
+					if (route.scopeType === 'folder') {
+						const folderId = extractResourceLocatorValue(route.folder);
+						if (folderId) {
+							const inScope = await isResourceInFolderScope.call(
+								this,
+								accountId,
+								payload,
+								folderId,
+								route.folderScope ?? 'subtree',
+								lookupCache,
+							);
+							if (!inScope) continue;
+						}
+					}
+
+					if (route.scopeType === 'share' && payload.resource?.type !== 'share') {
+						const inScope = isShareFolderScope(route)
+							? await isInShareFolder.call(this, accountId, payload, route, lookupCache)
+							: await isResourceInShare.call(
+									this,
+									accountId,
+									payload,
+									extractResourceLocatorValue(route.share) ?? '',
+									lookupCache,
+								);
 						if (!inScope) continue;
 					}
+
+					matchedRoutes.push(routeIndex);
 				}
 
-				if (route.scopeType === 'share' && route.shareScope !== 'entire_share') {
-					const shareFolderId = extractResourceLocatorValue(route.shareFolder);
-					if (shareFolderId) {
-						const inScope = await isResourceInFolderScope.call(
-							this,
-							accountId,
-							payload,
-							shareFolderId,
-							route.shareScope === 'folder_in_share_subtree' ? 'subtree' : 'exact',
-						);
-						if (!inScope) continue;
-					}
+				for (const routeIndex of matchedRoutes) {
+					returnData[routeIndex].push(item);
 				}
-
-				returnData[routeIndex].push(item);
+			} catch (error) {
+				if (!this.continueOnFail() || returnData.length === 0) throw error;
+				returnData[0].push({
+					json: { ...item.json, error: (error as Error).message },
+					pairedItem: { item: itemIndex },
+				});
 			}
 		}
 

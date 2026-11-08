@@ -7,9 +7,15 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes } from 'n8n-workflow';
 
-import type { FrameIoEnrichProfile } from './types';
-import type { FrameIoWebhookPayload } from './types';
-import { enrichEventPayload } from './GenericFunctions';
+import { createLookupCache, enrichEventPayload, getCredentialCacheScope } from './GenericFunctions';
+import type { FrameIoEnrichProfile, FrameIoWebhookPayload } from './types';
+
+/** Fields enrichment added on top of the incoming payload. */
+function pickEnrichedFields(payload: IDataObject, enriched: IDataObject): IDataObject {
+	return Object.fromEntries(
+		Object.entries(enriched).filter(([key]) => !Object.prototype.hasOwnProperty.call(payload, key)),
+	);
+}
 
 export class FrameIoEnrich implements INodeType {
 	description: INodeTypeDescription = {
@@ -44,12 +50,12 @@ export class FrameIoEnrich implements INodeType {
 				name: 'profiles',
 				type: 'multiOptions',
 				options: [
-					{ name: 'Resource', value: 'resource' },
-					{ name: 'Project', value: 'project' },
 					{ name: 'Actor / Author', value: 'actor' },
-					{ name: 'Metadata', value: 'metadata' },
 					{ name: 'Media Links', value: 'mediaLinks' },
+					{ name: 'Metadata', value: 'metadata' },
 					{ name: 'Parent Folder', value: 'parentFolder' },
+					{ name: 'Project', value: 'project' },
+					{ name: 'Resource', value: 'resource' },
 				],
 				default: ['resource', 'actor'],
 			},
@@ -63,13 +69,13 @@ export class FrameIoEnrich implements INodeType {
 					},
 				},
 				options: [
+					{ name: 'Efficient Transcode', value: 'efficient' },
+					{ name: 'High Quality Transcode', value: 'highQuality' },
+					{ name: 'Original Download', value: 'original' },
+					{ name: 'Preview Video', value: 'previewVideo' },
+					{ name: 'Scrub Sheet', value: 'scrubSheet' },
 					{ name: 'Thumbnail', value: 'thumbnail' },
 					{ name: 'Thumbnail High Quality', value: 'thumbnailHighQuality' },
-					{ name: 'Scrub Sheet', value: 'scrubSheet' },
-					{ name: 'Preview Video', value: 'previewVideo' },
-					{ name: 'High Quality Transcode', value: 'highQuality' },
-					{ name: 'Efficient Transcode', value: 'efficient' },
-					{ name: 'Original Download', value: 'original' },
 				],
 				default: ['thumbnail', 'thumbnailHighQuality'],
 			},
@@ -100,23 +106,32 @@ export class FrameIoEnrich implements INodeType {
 		const mediaLinks = this.getNodeParameter('mediaLinks', 0, []) as string[];
 		const skipOnDelete = this.getNodeParameter('skipOnDelete', 0) as boolean;
 		const outputMode = this.getNodeParameter('outputMode', 0) as string;
-		const staticData = this.getWorkflowStaticData('global');
+		const cache = createLookupCache(getCredentialCacheScope.call(this));
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			const item = items[itemIndex];
 			const payload = item.json as FrameIoWebhookPayload;
 
-			const enriched = await enrichEventPayload.call(this, payload, profiles, {
-				mediaLinks,
-				skipOnDelete,
-				staticData,
-			});
+			try {
+				const enriched = await enrichEventPayload.call(this, payload, profiles, {
+					mediaLinks,
+					skipOnDelete,
+					cache,
+				});
 
-			returnData.push({
-				json: (outputMode === 'replace' ? enriched : { ...item.json, ...enriched }) as IDataObject,
-				pairedItem: { item: itemIndex },
-				binary: item.binary,
-			});
+				returnData.push({
+					json: outputMode === 'replace' ? pickEnrichedFields(payload, enriched) : enriched,
+					pairedItem: { item: itemIndex },
+					binary: item.binary,
+				});
+			} catch (error) {
+				if (!this.continueOnFail()) throw error;
+				returnData.push({
+					json: { ...item.json, error: (error as Error).message },
+					pairedItem: { item: itemIndex },
+					binary: item.binary,
+				});
+			}
 		}
 
 		return [returnData];

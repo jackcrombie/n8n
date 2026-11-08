@@ -9,7 +9,7 @@ export class FrameIoOAuth2Api implements ICredentialType {
 
 	displayName = 'Frame.io OAuth2 API';
 
-	documentationUrl = 'frameIo';
+	documentationUrl = 'frameio';
 
 	properties: INodeProperties[] = [
 		{

@@ -1,8 +1,8 @@
 import type { IHookFunctions, IWebhookFunctions } from 'n8n-workflow';
 import type { Mock, Mocked } from 'vitest';
 
-import { frameIoApiRequest } from '../GenericFunctions';
 import { verifyFrameIoWebhook } from '../FrameIoTriggerHelpers';
+import { frameIoApiRequest } from '../GenericFunctions';
 import { FrameIoTriggerV1 } from '../V1/FrameIoTriggerV1.node';
 
 vi.mock('../GenericFunctions');
@@ -72,11 +72,11 @@ describe('FrameIoTrigger', () => {
 			(frameIoApiRequest as Mock).mockResolvedValue({
 				data: {
 					id: 'webhook-1',
-					signing_secret: 'secret-abc',
+					secret: 'secret-abc',
 				},
 			});
 
-			const result = await trigger.webhookMethods!.default.create.call(
+			const result = await trigger.webhookMethods.default.create.call(
 				mockHookFunctions as unknown as IHookFunctions,
 			);
 
@@ -117,11 +117,11 @@ describe('FrameIoTrigger', () => {
 			(frameIoApiRequest as Mock).mockResolvedValue({
 				data: {
 					id: 'webhook-1',
-					signing_secret: 'secret-abc',
+					secret: 'secret-abc',
 				},
 			});
 
-			await trigger.webhookMethods!.default.create.call(
+			await trigger.webhookMethods.default.create.call(
 				mockHookFunctions as unknown as IHookFunctions,
 			);
 
@@ -144,7 +144,7 @@ describe('FrameIoTrigger', () => {
 		it('should return false when webhook id is missing', async () => {
 			mockHookFunctions.getWorkflowStaticData.mockReturnValue({});
 
-			const result = await trigger.webhookMethods!.default.checkExists.call(
+			const result = await trigger.webhookMethods.default.checkExists.call(
 				mockHookFunctions as unknown as IHookFunctions,
 			);
 
@@ -161,11 +161,51 @@ describe('FrameIoTrigger', () => {
 				data: { url: webhookUrl, active: true },
 			});
 
-			const result = await trigger.webhookMethods!.default.checkExists.call(
+			const result = await trigger.webhookMethods.default.checkExists.call(
 				mockHookFunctions as unknown as IHookFunctions,
 			);
 
 			expect(result).toBe(true);
+		});
+	});
+
+	describe('webhookMethods.default.checkExists (account)', () => {
+		it('should return false when the account changed since the webhook was created', async () => {
+			mockHookFunctions.getNodeWebhookUrl.mockReturnValue('https://example.com/webhook');
+			mockHookFunctions.getNodeParameter.mockReturnValue('account-2');
+			mockHookFunctions.getWorkflowStaticData.mockReturnValue({
+				webhookId: 'webhook-1',
+				accountId: 'account-1',
+			});
+
+			const result = await trigger.webhookMethods.default.checkExists.call(
+				mockHookFunctions as unknown as IHookFunctions,
+			);
+
+			expect(result).toBe(false);
+			expect(frameIoApiRequest).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('webhookMethods.default.delete (account)', () => {
+		it('should delete the webhook from the account it was created in', async () => {
+			const webhookData: Record<string, string> = {
+				webhookId: 'webhook-1',
+				accountId: 'account-1',
+			};
+			mockHookFunctions.getNodeParameter.mockReturnValue('account-2');
+			mockHookFunctions.getWorkflowStaticData.mockReturnValue(webhookData);
+			(frameIoApiRequest as Mock).mockResolvedValue({});
+
+			await trigger.webhookMethods.default.delete.call(
+				mockHookFunctions as unknown as IHookFunctions,
+			);
+
+			expect(frameIoApiRequest).toHaveBeenCalledWith(
+				'DELETE',
+				'/v4/accounts/account-1/webhooks/webhook-1',
+			);
+			expect(webhookData.accountId).toBeUndefined();
 		});
 	});
 
@@ -180,7 +220,7 @@ describe('FrameIoTrigger', () => {
 			mockHookFunctions.getWorkflowStaticData.mockReturnValue(webhookData);
 			(frameIoApiRequest as Mock).mockResolvedValue({});
 
-			const result = await trigger.webhookMethods!.default.delete.call(
+			const result = await trigger.webhookMethods.default.delete.call(
 				mockHookFunctions as unknown as IHookFunctions,
 			);
 
@@ -195,6 +235,23 @@ describe('FrameIoTrigger', () => {
 	});
 
 	describe('webhook', () => {
+		it('should respond 401 without starting the workflow when the signature is invalid', async () => {
+			(verifyFrameIoWebhook as Mock).mockResolvedValue(false);
+			const res = { status: vi.fn(), send: vi.fn(), end: vi.fn() };
+			res.status.mockReturnValue(res);
+			res.send.mockReturnValue(res);
+			const webhookFunctions = {
+				...mockWebhookFunctions,
+				getResponseObject: vi.fn().mockReturnValue(res),
+			};
+
+			const result = await trigger.webhook.call(webhookFunctions as unknown as IWebhookFunctions);
+
+			expect(res.status).toHaveBeenCalledWith(401);
+			expect(result).toEqual({ noWebhookResponse: true });
+			expect(mockWebhookFunctions.getBodyData).not.toHaveBeenCalled();
+		});
+
 		it('should return empty response for unsubscribed events', async () => {
 			(verifyFrameIoWebhook as Mock).mockResolvedValue(true);
 			mockWebhookFunctions.getBodyData.mockReturnValue({
@@ -208,7 +265,7 @@ describe('FrameIoTrigger', () => {
 			});
 			mockWebhookFunctions.getWorkflowStaticData.mockReturnValue({});
 
-			const result = await trigger.webhook!.call(
+			const result = await trigger.webhook.call(
 				mockWebhookFunctions as unknown as IWebhookFunctions,
 			);
 
@@ -231,7 +288,7 @@ describe('FrameIoTrigger', () => {
 			});
 			mockWebhookFunctions.getWorkflowStaticData.mockReturnValue({});
 
-			const result = await trigger.webhook!.call(
+			const result = await trigger.webhook.call(
 				mockWebhookFunctions as unknown as IWebhookFunctions,
 			);
 
@@ -255,7 +312,7 @@ describe('FrameIoTrigger', () => {
 			});
 			mockWebhookFunctions.getWorkflowStaticData.mockReturnValue({});
 
-			const result = await trigger.webhook!.call(
+			const result = await trigger.webhook.call(
 				mockWebhookFunctions as unknown as IWebhookFunctions,
 			);
 

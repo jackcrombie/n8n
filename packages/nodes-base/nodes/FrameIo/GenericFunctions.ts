@@ -11,13 +11,13 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError } from 'n8n-workflow';
 
+import { FRAME_IO_API_BASE, FRAME_IO_CREDENTIAL, MEDIA_LINK_INCLUDE_MAP } from './constants';
 import {
-	DEFAULT_CACHE_TTL_MS,
-	FRAME_IO_API_BASE,
-	FRAME_IO_CREDENTIAL,
-	MEDIA_LINK_INCLUDE_MAP,
-} from './constants';
-import type { FrameIoCacheStore, FrameIoEnrichProfile, FrameIoWebhookPayload } from './types';
+	FrameIoResourceCache,
+	frameIoResourceCache,
+	pathReferencesEvent,
+} from './FrameIoResourceCache';
+import type { FrameIoEnrichProfile, FrameIoWebhookPayload } from './types';
 
 type FrameIoRequestContext =
 	| IHookFunctions
@@ -26,6 +26,8 @@ type FrameIoRequestContext =
 	| IWebhookFunctions;
 
 const sleep = async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms));
+
+const MAX_RETRY_AFTER_MS = 30_000;
 
 const DEFAULT_RESOURCE_LABEL_FIELDS = ['display_name', 'name', 'title'] as const;
 
@@ -62,67 +64,12 @@ export function buildIncludeParam(includes: string[]): string | undefined {
 	return unique.join(',');
 }
 
-export function buildCacheKey(
-	accountId: string,
-	method: string,
-	path: string,
-	includeHash: string,
-): string {
-	return `${accountId}:${method}:${path}:${includeHash}`;
-}
-
-export function getCacheStore(staticData: IDataObject): FrameIoCacheStore {
-	if (!staticData.frameIoResourceCache) {
-		staticData.frameIoResourceCache = { entries: {} };
-	}
-	return staticData.frameIoResourceCache as FrameIoCacheStore;
-}
-
-export function getCachedResource(
-	staticData: IDataObject,
-	cacheKey: string,
-	ttlMs: number = DEFAULT_CACHE_TTL_MS,
-): IDataObject | undefined {
-	const store = getCacheStore(staticData);
-	const entry = store.entries?.[cacheKey];
-	if (!entry || entry.stale) return undefined;
-	if (Date.now() - entry.cachedAt > ttlMs) return undefined;
-	return entry.data;
-}
-
-export function setCachedResource(
-	staticData: IDataObject,
-	cacheKey: string,
-	data: IDataObject,
-): void {
-	const store = getCacheStore(staticData);
-	if (!store.entries) store.entries = {};
-	store.entries[cacheKey] = { data, cachedAt: Date.now() };
-}
-
-export function invalidateCacheFromWebhook(
-	staticData: IDataObject,
-	body: FrameIoWebhookPayload,
-): void {
-	const store = getCacheStore(staticData);
-	if (!store.entries) return;
-
-	const resourceId = body.resource?.id;
-	const projectId = body.project?.id;
-	const keysToInvalidate = new Set<string>();
-
-	for (const key of Object.keys(store.entries)) {
-		if (resourceId && key.includes(resourceId)) {
-			keysToInvalidate.add(key);
-		}
-		if (projectId && key.includes(projectId)) {
-			keysToInvalidate.add(key);
-		}
-	}
-
-	for (const key of keysToInvalidate) {
-		delete store.entries[key];
-	}
+/**
+ * Cache scope for the node's Frame.io credential. Returns undefined when the credential
+ * has no ID, in which case callers skip the shared cache entirely.
+ */
+export function getCredentialCacheScope(this: FrameIoRequestContext): string | undefined {
+	return this.getNode().credentials?.[FRAME_IO_CREDENTIAL]?.id ?? undefined;
 }
 
 export function eventMatchesPattern(eventType: string, patterns: string[]): boolean {
@@ -135,6 +82,31 @@ export function eventMatchesPattern(eventType: string, patterns: string[]): bool
 		}
 	}
 	return false;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
+/** Status code from raw axios errors (`response.status`) or wrapped NodeApiErrors (`httpCode`). */
+export function getErrorStatusCode(error: unknown): number | undefined {
+	if (!isObject(error)) return undefined;
+	const response = isObject(error.response) ? error.response : undefined;
+	const candidates = [error.statusCode, error.status, response?.status, error.httpCode];
+	for (const candidate of candidates) {
+		const parsed = typeof candidate === 'string' ? Number(candidate) : candidate;
+		if (typeof parsed === 'number' && Number.isInteger(parsed)) return parsed;
+	}
+	return undefined;
+}
+
+function getRetryAfterMs(error: unknown): number | undefined {
+	if (!isObject(error) || !isObject(error.response) || !isObject(error.response.headers)) {
+		return undefined;
+	}
+	const seconds = Number(error.response.headers['retry-after']);
+	if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+	return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
 }
 
 export async function frameIoApiRequest(
@@ -173,9 +145,8 @@ export async function frameIoApiRequest(
 				options,
 			)) as IDataObject;
 		} catch (error) {
-			const statusCode = (error as JsonObject).statusCode as number | undefined;
-			if (statusCode === 429 && attempt < maxAttempts - 1) {
-				const backoffMs = 1000 * 2 ** attempt;
+			if (getErrorStatusCode(error) === 429 && attempt < maxAttempts - 1) {
+				const backoffMs = getRetryAfterMs(error) ?? 1000 * 2 ** attempt;
 				await sleep(backoffMs);
 				attempt++;
 				continue;
@@ -193,11 +164,13 @@ export async function frameIoApiRequestAllItems(
 	endpoint: string,
 	propertyName = 'data',
 	qs: IDataObject = {},
+	limit?: number,
 ): Promise<IDataObject[]> {
 	const returnData: IDataObject[] = [];
 	let after: string | undefined;
 
 	do {
+		if (limit !== undefined && returnData.length >= limit) break;
 		const query: IDataObject = { ...qs, page_size: qs.page_size ?? 50 };
 		if (after) {
 			query.after = after;
@@ -205,7 +178,7 @@ export async function frameIoApiRequestAllItems(
 
 		const response = await frameIoApiRequest.call(this, method, endpoint, {}, query);
 		const items = (response[propertyName] as IDataObject[]) ?? [];
-		returnData.push(...items);
+		returnData.push.apply(returnData, items);
 
 		const links = response.links as IDataObject | undefined;
 		const next = links?.next as string | undefined;
@@ -216,7 +189,7 @@ export async function frameIoApiRequestAllItems(
 		}
 	} while (after);
 
-	return returnData;
+	return limit === undefined ? returnData : returnData.slice(0, limit);
 }
 
 function getMediaLinkIncludes(mediaLinks: string[]): string[] {
@@ -255,10 +228,11 @@ export async function enrichEventPayload(
 	options: {
 		mediaLinks?: string[];
 		skipOnDelete?: boolean;
-		staticData?: IDataObject;
+		cache?: FrameIoLookupCache;
 	},
 ): Promise<IDataObject> {
 	const output: IDataObject = { ...payload };
+	const cache = options.cache;
 
 	if (options.skipOnDelete && payload.type?.endsWith('.deleted')) {
 		return output;
@@ -272,12 +246,20 @@ export async function enrichEventPayload(
 		return output;
 	}
 
+	// The event may describe a change, so never serve its own resource from cache.
+	if (cache) invalidateLookupForEvent(cache, payload);
+
+	// File-only includes (`metadata`, `media_links.*`, `project`) 422 on comments/folders.
 	const includes: string[] = [];
-	if (profiles.includes('project')) includes.push('project', 'project.owner');
-	if (profiles.includes('metadata')) includes.push('metadata');
+	if (profiles.includes('project') && resourceType === 'file') {
+		includes.push('project', 'project.owner');
+	}
+	if (profiles.includes('metadata') && resourceType === 'file') {
+		includes.push('metadata');
+	}
 	if (profiles.includes('actor') && resourceType === 'file') includes.push('creator');
 	if (profiles.includes('actor') && resourceType === 'comment') includes.push('owner');
-	if (profiles.includes('mediaLinks') && options.mediaLinks?.length) {
+	if (profiles.includes('mediaLinks') && resourceType === 'file' && options.mediaLinks?.length) {
 		includes.push(...getMediaLinkIncludes(options.mediaLinks));
 	}
 
@@ -290,36 +272,41 @@ export async function enrichEventPayload(
 	) {
 		const path = getShowPath(accountId, resourceType, resourceId);
 		if (path) {
-			const includeParam = buildIncludeParam(includes);
-			const includeHash = includeParam ?? '';
-			const cacheKey = options.staticData ? buildCacheKey(accountId, 'GET', path, includeHash) : '';
-
-			let resourceData: IDataObject | undefined;
-			if (options.staticData && cacheKey) {
-				resourceData = getCachedResource(options.staticData, cacheKey);
+			const resourceData = await getResourceData.call(
+				this,
+				path,
+				cache,
+				buildIncludeParam(includes),
+			);
+			output.resource_data = resourceData;
+			if (profiles.includes('project') && resourceData.project) {
+				output.project_data = resourceData.project as IDataObject;
 			}
-
-			if (!resourceData) {
-				const qs: IDataObject = {};
-				if (includeParam) qs.include = includeParam;
-				const response = await frameIoApiRequest.call(this, 'GET', path, {}, qs);
-				resourceData = (response.data as IDataObject) ?? response;
-				if (options.staticData && cacheKey && resourceData) {
-					setCachedResource(options.staticData, cacheKey, resourceData);
-				}
+			if (profiles.includes('actor')) {
+				const actor = (resourceData.creator as IDataObject) ?? (resourceData.owner as IDataObject);
+				if (actor) output.user_data = actor;
 			}
+		}
+	}
 
-			if (resourceData) {
-				output.resource_data = resourceData;
-				if (profiles.includes('project') && resourceData.project) {
-					output.project_data = resourceData.project as IDataObject;
-				}
-				if (profiles.includes('actor')) {
-					const actor =
-						(resourceData.creator as IDataObject) ?? (resourceData.owner as IDataObject);
-					if (actor) output.user_data = actor;
-				}
+	// Comments don't support metadata/media_links includes — load the parent file instead.
+	if (
+		resourceType === 'comment' &&
+		(profiles.includes('metadata') || profiles.includes('mediaLinks'))
+	) {
+		const fileId = (output.resource_data as IDataObject | undefined)?.file_id as string | undefined;
+		if (fileId) {
+			const fileIncludes: string[] = [];
+			if (profiles.includes('metadata')) fileIncludes.push('metadata');
+			if (profiles.includes('mediaLinks') && options.mediaLinks?.length) {
+				fileIncludes.push(...getMediaLinkIncludes(options.mediaLinks));
 			}
+			output.file_data = await getResourceData.call(
+				this,
+				`/v4/accounts/${accountId}/files/${fileId}`,
+				cache,
+				buildIncludeParam(fileIncludes),
+			);
 		}
 	}
 
@@ -327,12 +314,15 @@ export async function enrichEventPayload(
 		profiles.includes('parentFolder') &&
 		(resourceType === 'file' || resourceType === 'comment')
 	) {
-		const fileId =
-			resourceType === 'file'
-				? resourceId
-				: ((output.resource_data as IDataObject)?.file_id as string);
+		let fileId: string | undefined = resourceId;
+		if (resourceType === 'comment') {
+			// resource_data is only fetched when another profile asked for it.
+			fileId =
+				((output.resource_data as IDataObject | undefined)?.file_id as string | undefined) ??
+				(await getFileIdForComment.call(this, accountId, resourceId, cache));
+		}
 		if (fileId) {
-			const folderPath = await getFolderPathForFile.call(this, accountId, fileId);
+			const folderPath = await getFolderPathForFile.call(this, accountId, fileId, 20, cache);
 			if (folderPath.length) {
 				output.folder_path = folderPath;
 				output.folder_data = folderPath[folderPath.length - 1];
@@ -341,18 +331,70 @@ export async function enrichEventPayload(
 	}
 
 	if (profiles.includes('project') && !output.project_data && payload.project?.id) {
-		const projectPath = `/v4/accounts/${accountId}/projects/${payload.project.id}`;
-		const response = await frameIoApiRequest.call(
+		output.project_data = await getResourceData.call(
 			this,
-			'GET',
-			projectPath,
-			{},
-			{ include: 'owner' },
+			`/v4/accounts/${accountId}/projects/${payload.project.id}`,
+			cache,
+			'owner',
 		);
-		output.project_data = (response.data as IDataObject) ?? response;
 	}
 
 	return output;
+}
+
+/**
+ * GET lookups for one execution. `memo` dedupes requests within the execution;
+ * `sharedScope` (a credential scope) additionally enables the cross-execution cache.
+ */
+export interface FrameIoLookupCache {
+	memo: Map<string, Promise<IDataObject>>;
+	shareAssetIds: Map<string, Promise<Set<string>>>;
+	sharedScope?: string;
+}
+
+export function createLookupCache(sharedScope?: string): FrameIoLookupCache {
+	return { memo: new Map(), shareAssetIds: new Map(), sharedScope };
+}
+
+/** Drops lookups the event may have made stale, in this execution and the shared cache. */
+export function invalidateLookupForEvent(
+	cache: FrameIoLookupCache,
+	payload: FrameIoWebhookPayload,
+): void {
+	for (const key of [...cache.memo.keys()]) {
+		if (pathReferencesEvent(key.split('?')[0], payload)) cache.memo.delete(key);
+	}
+	if (cache.sharedScope) frameIoResourceCache.invalidateForEvent(cache.sharedScope, payload);
+}
+
+async function getResourceData(
+	this: FrameIoRequestContext,
+	path: string,
+	cache?: FrameIoLookupCache,
+	include?: string,
+): Promise<IDataObject> {
+	const memoKey = include ? `${path}?include=${include}` : path;
+	const pending = cache?.memo.get(memoKey);
+	if (pending) return await pending;
+
+	const sharedKey = cache?.sharedScope
+		? FrameIoResourceCache.buildKey(cache.sharedScope, path, include)
+		: undefined;
+	const shared = sharedKey ? frameIoResourceCache.get(sharedKey) : undefined;
+	if (shared) return shared;
+
+	const request = frameIoApiRequest
+		.call(this, 'GET', path, {}, include ? { include } : {})
+		.then((response) => (response.data as IDataObject) ?? response);
+	cache?.memo.set(memoKey, request);
+	try {
+		const data = await request;
+		if (sharedKey) frameIoResourceCache.set(sharedKey, data);
+		return data;
+	} catch (error) {
+		cache?.memo.delete(memoKey);
+		throw error;
+	}
 }
 
 export async function getFolderPathForFile(
@@ -360,30 +402,16 @@ export async function getFolderPathForFile(
 	accountId: string,
 	fileId: string,
 	maxDepth = 20,
+	cache?: FrameIoLookupCache,
 ): Promise<IDataObject[]> {
-	const path: IDataObject[] = [];
-	const fileResponse = await frameIoApiRequest.call(
+	const fileData = await getResourceData.call(
 		this,
-		'GET',
 		`/v4/accounts/${accountId}/files/${fileId}`,
+		cache,
 	);
-	const fileData = (fileResponse.data as IDataObject) ?? fileResponse;
-	let parentId = fileData.parent_id as string | undefined;
-
-	let depth = 0;
-	while (parentId && depth < maxDepth) {
-		const folderResponse = await frameIoApiRequest.call(
-			this,
-			'GET',
-			`/v4/accounts/${accountId}/folders/${parentId}`,
-		);
-		const folderData = (folderResponse.data as IDataObject) ?? folderResponse;
-		path.unshift(folderData);
-		parentId = folderData.parent_id as string | undefined;
-		depth++;
-	}
-
-	return path;
+	const parentId = fileData.parent_id as string | undefined;
+	if (!parentId) return [];
+	return await getFolderPathForFolder.call(this, accountId, parentId, maxDepth, cache);
 }
 
 export async function isResourceInFolderScope(
@@ -392,6 +420,7 @@ export async function isResourceInFolderScope(
 	payload: FrameIoWebhookPayload,
 	targetFolderId: string,
 	folderScope: 'exact' | 'subtree',
+	cache?: FrameIoLookupCache,
 ): Promise<boolean> {
 	const resourceType = payload.resource?.type;
 	const resourceId = payload.resource?.id;
@@ -401,7 +430,7 @@ export async function isResourceInFolderScope(
 	if (resourceType === 'folder') {
 		if (resourceId === targetFolderId) return true;
 		if (folderScope === 'exact') return false;
-		const path = await getFolderPathForFolder.call(this, accountId, resourceId);
+		const path = await getFolderPathForFolder.call(this, accountId, resourceId, 20, cache);
 		return path.some((folder) => folder.id === targetFolderId);
 	}
 
@@ -409,9 +438,9 @@ export async function isResourceInFolderScope(
 		const fileId =
 			resourceType === 'file'
 				? resourceId
-				: await getFileIdForComment.call(this, accountId, resourceId);
+				: await getFileIdForComment.call(this, accountId, resourceId, cache);
 		if (!fileId) return false;
-		const path = await getFolderPathForFile.call(this, accountId, fileId);
+		const path = await getFolderPathForFile.call(this, accountId, fileId, 20, cache);
 		const folderIds = path.map((folder) => folder.id as string);
 		if (folderScope === 'exact') {
 			return folderIds[folderIds.length - 1] === targetFolderId;
@@ -422,17 +451,62 @@ export async function isResourceInFolderScope(
 	return false;
 }
 
+/** IDs of everything in a share; the API lists shared folders' descendants as their own rows. */
+async function getShareAssetIds(
+	this: FrameIoRequestContext,
+	accountId: string,
+	shareId: string,
+	cache?: FrameIoLookupCache,
+): Promise<Set<string>> {
+	const pending = cache?.shareAssetIds.get(shareId);
+	if (pending) return await pending;
+	const request = frameIoApiRequestAllItems
+		.call(this, 'GET', `/v4/accounts/${accountId}/shares/${shareId}/assets`)
+		.then((assets) => new Set(assets.map((asset) => asset.id as string)));
+	cache?.shareAssetIds.set(shareId, request);
+	try {
+		return await request;
+	} catch (error) {
+		cache?.shareAssetIds.delete(shareId);
+		throw error;
+	}
+}
+
+export async function isResourceInShare(
+	this: FrameIoRequestContext,
+	accountId: string,
+	payload: FrameIoWebhookPayload,
+	shareId: string,
+	cache?: FrameIoLookupCache,
+): Promise<boolean> {
+	const resourceType = payload.resource?.type;
+	const resourceId = payload.resource?.id;
+	if (!resourceType || !resourceId) return false;
+	if (resourceType === 'share') return resourceId === shareId;
+
+	let assetId: string | undefined;
+	if (resourceType === 'file' || resourceType === 'folder') {
+		assetId = resourceId;
+	} else if (resourceType === 'comment') {
+		assetId = await getFileIdForComment.call(this, accountId, resourceId, cache);
+	}
+	if (!assetId) return false;
+
+	const assetIds = await getShareAssetIds.call(this, accountId, shareId, cache);
+	return assetIds.has(assetId);
+}
+
 async function getFileIdForComment(
 	this: FrameIoRequestContext,
 	accountId: string,
 	commentId: string,
+	cache?: FrameIoLookupCache,
 ): Promise<string | undefined> {
-	const response = await frameIoApiRequest.call(
+	const data = await getResourceData.call(
 		this,
-		'GET',
 		`/v4/accounts/${accountId}/comments/${commentId}`,
+		cache,
 	);
-	const data = (response.data as IDataObject) ?? response;
 	return data.file_id as string | undefined;
 }
 
@@ -441,18 +515,18 @@ export async function getFolderPathForFolder(
 	accountId: string,
 	folderId: string,
 	maxDepth = 20,
+	cache?: FrameIoLookupCache,
 ): Promise<IDataObject[]> {
 	const path: IDataObject[] = [];
 	let currentId: string | undefined = folderId;
 	let depth = 0;
 
 	while (currentId && depth < maxDepth) {
-		const response = await frameIoApiRequest.call(
+		const folderData = await getResourceData.call(
 			this,
-			'GET',
 			`/v4/accounts/${accountId}/folders/${currentId}`,
+			cache,
 		);
-		const folderData = (response.data as IDataObject) ?? response;
 		path.unshift(folderData);
 		currentId = folderData.parent_id as string | undefined;
 		depth++;

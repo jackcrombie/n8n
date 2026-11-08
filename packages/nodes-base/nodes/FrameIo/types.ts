@@ -18,16 +18,6 @@ export interface FrameIoWebhookPayload extends IDataObject {
 	resource: FrameIoResourceRef;
 }
 
-export interface FrameIoCacheEntry {
-	data: IDataObject;
-	cachedAt: number;
-	stale?: boolean;
-}
-
-export interface FrameIoCacheStore {
-	entries?: Record<string, FrameIoCacheEntry>;
-}
-
 export type FrameIoEnrichProfile =
 	| 'resource'
 	| 'project'

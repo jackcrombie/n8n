@@ -7,14 +7,14 @@ import type {
 	IWebhookFunctions,
 	IWebhookResponseData,
 } from 'n8n-workflow';
-import { NodeApiError, NodeConnectionTypes } from 'n8n-workflow';
+import { NodeConnectionTypes } from 'n8n-workflow';
 
-import { frameIoTriggerProperties } from '../descriptions/TriggerDescription';
 import { FRAME_IO_ALL_EVENTS, resolveFrameIoWebhookEvents } from '../constants';
-import { frameIoApiRequest, invalidateCacheFromWebhook } from '../GenericFunctions';
-import type { FrameIoWebhookPayload } from '../types';
+import { frameIoTriggerProperties } from '../descriptions/TriggerDescription';
 import { verifyFrameIoWebhook } from '../FrameIoTriggerHelpers';
+import { frameIoApiRequest } from '../GenericFunctions';
 import { getAccounts, getWorkspaces } from '../LoadOptionsMethods';
+import type { FrameIoWebhookPayload } from '../types';
 
 export class FrameIoTriggerV1 implements INodeType {
 	description: INodeTypeDescription;
@@ -27,7 +27,8 @@ export class FrameIoTriggerV1 implements INodeType {
 			icon: 'file:frameIo.svg',
 			group: ['trigger'],
 			version: 1,
-			subtitle: '={{$parameter["workspaceId"]}}',
+			subtitle:
+				'={{$parameter["events"].includes("*") ? "All events" : $parameter["events"].join(", ")}}',
 			description: 'Starts the workflow when Frame.io events occur',
 			defaults: {
 				name: 'Frame.io Trigger',
@@ -70,6 +71,11 @@ export class FrameIoTriggerV1 implements INodeType {
 					return false;
 				}
 
+				// Account changed since the webhook was created: let n8n recreate it.
+				if (webhookData.accountId && webhookData.accountId !== accountId) {
+					return false;
+				}
+
 				try {
 					const response = await frameIoApiRequest.call(
 						this,
@@ -108,8 +114,11 @@ export class FrameIoTriggerV1 implements INodeType {
 
 				const data = (response.data as Record<string, unknown>) ?? response;
 				webhookData.webhookId = data.id as string;
-				if (data.signing_secret) {
-					webhookData.signingSecret = data.signing_secret as string;
+				webhookData.accountId = accountId;
+				// V4 create response exposes the secret once as `secret` (not `signing_secret`).
+				const signingSecret = (data.secret ?? data.signing_secret) as string | undefined;
+				if (signingSecret) {
+					webhookData.signingSecret = signingSecret;
 				}
 
 				return true;
@@ -117,7 +126,10 @@ export class FrameIoTriggerV1 implements INodeType {
 
 			async delete(this: IHookFunctions): Promise<boolean> {
 				const webhookData = this.getWorkflowStaticData('node');
-				const accountId = this.getNodeParameter('accountId') as string;
+				// Delete from the account the webhook was created in, even if the parameter changed.
+				const accountId =
+					(webhookData.accountId as string | undefined) ??
+					(this.getNodeParameter('accountId') as string);
 
 				if (!webhookData.webhookId) {
 					return true;
@@ -135,6 +147,7 @@ export class FrameIoTriggerV1 implements INodeType {
 
 				delete webhookData.webhookId;
 				delete webhookData.signingSecret;
+				delete webhookData.accountId;
 				return true;
 			},
 		},
@@ -143,9 +156,9 @@ export class FrameIoTriggerV1 implements INodeType {
 	async webhook(this: IWebhookFunctions): Promise<IWebhookResponseData> {
 		const isValid = await verifyFrameIoWebhook.call(this);
 		if (!isValid) {
-			throw new NodeApiError(this.getNode(), {
-				message: 'Invalid Frame.io webhook signature',
-			});
+			const res = this.getResponseObject();
+			res.status(401).send('Unauthorized').end();
+			return { noWebhookResponse: true };
 		}
 
 		const body = this.getBodyData() as FrameIoWebhookPayload;
@@ -160,9 +173,6 @@ export class FrameIoTriggerV1 implements INodeType {
 		if (!catchAll && !subscribedEvents.includes(body.type)) {
 			return {};
 		}
-
-		const globalStaticData = this.getWorkflowStaticData('global');
-		invalidateCacheFromWebhook(globalStaticData, body);
 
 		return {
 			workflowData: [this.helpers.returnJsonArray(body as unknown as IDataObject)],

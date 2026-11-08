@@ -1,6 +1,5 @@
 import type { INodeProperties } from 'n8n-workflow';
 
-import { updateDisplayOptions } from '../../../../utils/utilities';
 import {
 	accountIdField,
 	additionalFieldsProperty,
@@ -9,6 +8,7 @@ import {
 	returnAllField,
 	workspaceIdField,
 } from './shared';
+import { updateDisplayOptions } from '../../../../utils/utilities';
 
 const accountOperations: INodeProperties[] = [
 	{
@@ -767,30 +767,43 @@ const metadataFields = updateDisplayOptions(
 	},
 	[
 		accountIdField,
+		workspaceIdField,
+		projectIdField,
 		{
-			displayName: 'Resource Type',
-			name: 'resourceType',
-			type: 'options',
-			options: [
-				{ name: 'File', value: 'file' },
-				{ name: 'Folder', value: 'folder' },
-				{ name: 'Project', value: 'project' },
-			],
-			default: 'file',
-		},
-		{
-			displayName: 'Resource ID',
-			name: 'resourceId',
+			displayName: 'File ID',
+			name: 'fileId',
 			type: 'string',
 			required: true,
 			default: '',
+			description: 'The file whose metadata should be updated',
 		},
 		{
-			displayName: 'Metadata Values (JSON)',
-			name: 'metadataValues',
-			type: 'json',
-			default: '{}',
-			description: 'Metadata key-value pairs to update',
+			displayName: 'Metadata Fields',
+			name: 'metadataFields',
+			type: 'resourceMapper',
+			noDataExpression: true,
+			default: {
+				mappingMode: 'defineBelow',
+				value: null,
+			},
+			required: true,
+			typeOptions: {
+				loadOptionsDependsOn: ['accountId'],
+				resourceMapper: {
+					resourceMapperMethod: 'getMetadataFields',
+					mode: 'add',
+					fieldWords: {
+						singular: 'field',
+						plural: 'fields',
+					},
+					// Only fields the user adds are sent, so other metadata is left untouched.
+					addAllFields: false,
+					multiKeyMatch: false,
+					supportAutoMap: true,
+				},
+			},
+			description:
+				'Fields to update. Select fields accept option names (e.g. "Approved"); multi-select fields accept comma-separated names.',
 		},
 	],
 );
@@ -962,18 +975,18 @@ export const frameIoProperties: INodeProperties[] = [
 		noDataExpression: true,
 		options: [
 			{ name: 'Account', value: 'account' },
-			{ name: 'Workspace', value: 'workspace' },
-			{ name: 'Project', value: 'project' },
-			{ name: 'Folder', value: 'folder' },
-			{ name: 'File', value: 'file' },
-			{ name: 'Comment', value: 'comment' },
-			{ name: 'Version Stack', value: 'versionStack' },
-			{ name: 'Share', value: 'share' },
-			{ name: 'Webhook', value: 'webhook' },
-			{ name: 'Metadata', value: 'metadata' },
 			{ name: 'Collection', value: 'collection' },
+			{ name: 'Comment', value: 'comment' },
 			{ name: 'Custom Field', value: 'customField' },
+			{ name: 'File', value: 'file' },
+			{ name: 'Folder', value: 'folder' },
+			{ name: 'Metadata', value: 'metadata' },
 			{ name: 'Permission', value: 'permission' },
+			{ name: 'Project', value: 'project' },
+			{ name: 'Share', value: 'share' },
+			{ name: 'Version Stack', value: 'versionStack' },
+			{ name: 'Webhook', value: 'webhook' },
+			{ name: 'Workspace', value: 'workspace' },
 		],
 		default: 'project',
 	},

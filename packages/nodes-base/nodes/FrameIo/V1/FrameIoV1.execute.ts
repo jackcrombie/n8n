@@ -1,6 +1,12 @@
 import type { IDataObject, IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
 
+import {
+	buildMetadataApiValue,
+	findFieldDefinition,
+	type FrameIoFieldDefinition,
+	toFieldDefinition,
+} from '../FrameIoMetadataHelpers';
 import { frameIoApiRequest, frameIoApiRequestAllItems } from '../GenericFunctions';
 
 function unwrapResponse(response: IDataObject): IDataObject {
@@ -55,13 +61,12 @@ async function handleList(
 	itemIndex: number,
 	endpoint: string,
 ): Promise<IDataObject[]> {
-	const returnAll = context.getNodeParameter('returnAll', itemIndex, false) as boolean;
+	const returnAll = context.getNodeParameter('returnAll', itemIndex, false);
 	if (returnAll) {
 		return await frameIoApiRequestAllItems.call(context, 'GET', endpoint);
 	}
-	const limit = context.getNodeParameter('limit', itemIndex, 50) as number;
-	const response = await frameIoApiRequest.call(context, 'GET', endpoint, {}, { page_size: limit });
-	return ((response.data as IDataObject[]) ?? []) as IDataObject[];
+	const limit = context.getNodeParameter('limit', itemIndex, 50);
+	return await frameIoApiRequestAllItems.call(context, 'GET', endpoint, 'data', {}, limit);
 }
 
 export async function executeFrameIo(
@@ -69,8 +74,9 @@ export async function executeFrameIo(
 	items: INodeExecutionData[],
 ): Promise<INodeExecutionData[]> {
 	const returnData: INodeExecutionData[] = [];
-	const resource = this.getNodeParameter('resource', 0) as string;
-	const operation = this.getNodeParameter('operation', 0) as string;
+	const resource = this.getNodeParameter('resource', 0);
+	const operation = this.getNodeParameter('operation', 0);
+	const fieldDefinitionsByAccount = new Map<string, FrameIoFieldDefinition[]>();
 
 	for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 		try {
@@ -89,11 +95,7 @@ export async function executeFrameIo(
 				}
 				case 'workspace': {
 					const workspaceId = this.getNodeParameter('workspaceId', itemIndex, '') as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'list') {
 						const workspaces = await handleList(
@@ -143,11 +145,7 @@ export async function executeFrameIo(
 				case 'project': {
 					const workspaceId = this.getNodeParameter('workspaceId', itemIndex) as string;
 					const projectId = this.getNodeParameter('projectId', itemIndex, '') as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'list') {
 						const projects = await handleList(
@@ -197,11 +195,7 @@ export async function executeFrameIo(
 				case 'folder': {
 					const projectId = this.getNodeParameter('projectId', itemIndex) as string;
 					const folderId = this.getNodeParameter('folderId', itemIndex) as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'get') {
 						const response = await frameIoApiRequest.call(
@@ -244,24 +238,29 @@ export async function executeFrameIo(
 						const childType = this.getNodeParameter('childType', itemIndex, 'both') as string;
 						const children: IDataObject[] = [];
 						if (childType === 'folders' || childType === 'both') {
-							children.push(
-								...(await handleList(
+							children.push.apply(
+								children,
+								await handleList(
 									this,
 									itemIndex,
 									`/v4/accounts/${accountId}/folders/${folderId}/folders`,
-								)),
+								),
 							);
 						}
 						if (childType === 'files' || childType === 'both') {
-							children.push(
-								...(await handleList(
+							children.push.apply(
+								children,
+								await handleList(
 									this,
 									itemIndex,
 									`/v4/accounts/${accountId}/folders/${folderId}/files`,
-								)),
+								),
 							);
 						}
-						for (const child of children) {
+						// Folders and files are fetched separately, so apply the limit to the combined list.
+						const returnAll = this.getNodeParameter('returnAll', itemIndex, false);
+						const limit = this.getNodeParameter('limit', itemIndex, 50);
+						for (const child of returnAll ? children : children.slice(0, limit)) {
 							returnData.push({ json: child, pairedItem: { item: itemIndex } });
 						}
 					}
@@ -269,11 +268,7 @@ export async function executeFrameIo(
 				}
 				case 'file': {
 					const fileId = this.getNodeParameter('fileId', itemIndex) as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'get') {
 						const qs: IDataObject = {};
@@ -313,11 +308,7 @@ export async function executeFrameIo(
 				case 'comment': {
 					const fileId = this.getNodeParameter('fileId', itemIndex, '') as string;
 					const commentId = this.getNodeParameter('commentId', itemIndex, '') as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'list') {
 						const comments = await handleList(
@@ -367,11 +358,7 @@ export async function executeFrameIo(
 				case 'versionStack': {
 					const projectId = this.getNodeParameter('projectId', itemIndex) as string;
 					const versionStackId = this.getNodeParameter('versionStackId', itemIndex) as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'list') {
 						const stacks = await handleList(
@@ -428,11 +415,7 @@ export async function executeFrameIo(
 				case 'share': {
 					const projectId = this.getNodeParameter('projectId', itemIndex) as string;
 					const shareId = this.getNodeParameter('shareId', itemIndex, '') as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'list') {
 						const shares = await handleList(
@@ -503,14 +486,10 @@ export async function executeFrameIo(
 				case 'webhook': {
 					const workspaceId = this.getNodeParameter('workspaceId', itemIndex) as string;
 					const webhookId = this.getNodeParameter('webhookId', itemIndex, '') as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 					const webhookBody = { ...additionalFields };
 					if (typeof webhookBody.events === 'string' && webhookBody.events) {
-						webhookBody.events = (webhookBody.events as string)
+						webhookBody.events = webhookBody.events
 							.split(',')
 							.map((event) => event.trim())
 							.filter(Boolean);
@@ -562,31 +541,107 @@ export async function executeFrameIo(
 					break;
 				}
 				case 'metadata': {
-					const resourceType = this.getNodeParameter('resourceType', itemIndex) as string;
-					const resourceId = this.getNodeParameter('resourceId', itemIndex) as string;
-					const metadataValues = this.getNodeParameter('metadataValues', itemIndex) as
-						| IDataObject
-						| string;
-					const parsedValues =
-						typeof metadataValues === 'string' ? JSON.parse(metadataValues) : metadataValues;
+					const projectId = this.getNodeParameter('projectId', itemIndex) as string;
+					const fileId = this.getNodeParameter('fileId', itemIndex) as string;
+					const mappingMode = this.getNodeParameter(
+						'metadataFields.mappingMode',
+						itemIndex,
+						'defineBelow',
+					) as string;
+					const autoMap = mappingMode === 'autoMapInputData';
+					// Auto-map reads the input item, whose keys are usually field names rather than IDs.
+					const mappedValues = autoMap
+						? items[itemIndex].json
+						: ((this.getNodeParameter(
+								'metadataFields.value',
+								itemIndex,
+								{},
+							) as IDataObject | null) ?? {});
+					const metadataEntries = Object.entries(mappedValues).filter(
+						([, value]) => value !== null && value !== undefined && value !== '',
+					);
 
-					const response = await frameIoApiRequest.call(
+					let fieldDefinitions = fieldDefinitionsByAccount.get(accountId);
+					if (!fieldDefinitions) {
+						fieldDefinitions = (
+							await frameIoApiRequestAllItems.call(
+								this,
+								'GET',
+								`/v4/accounts/${accountId}/metadata/field_definitions`,
+								'data',
+								{
+									filters: {
+										exclude_immutable: true,
+										exclude_inactive: true,
+									},
+								},
+							)
+						).map((field) => toFieldDefinition(field));
+						fieldDefinitionsByAccount.set(accountId, fieldDefinitions);
+					}
+
+					const values: IDataObject[] = [];
+					for (const [fieldNameOrId, rawValue] of metadataEntries) {
+						const field = findFieldDefinition(fieldDefinitions, fieldNameOrId);
+						if (!field) {
+							// Auto-mapped items commonly carry unrelated keys; skip them.
+							if (autoMap) continue;
+							throw new NodeOperationError(
+								this.getNode(),
+								`Field "${fieldNameOrId}" was not found. Use a field name (e.g. Status) or field definition ID.`,
+								{ itemIndex },
+							);
+						}
+
+						try {
+							values.push({
+								field_definition_id: field.id,
+								value: buildMetadataApiValue(field, rawValue),
+							});
+						} catch (error) {
+							throw new NodeOperationError(
+								this.getNode(),
+								error instanceof Error ? error.message : String(error),
+								{ itemIndex },
+							);
+						}
+					}
+
+					if (values.length === 0) {
+						throw new NodeOperationError(
+							this.getNode(),
+							autoMap
+								? 'No input fields match a Frame.io metadata field name or ID'
+								: 'Add at least one metadata field to update',
+							{ itemIndex },
+						);
+					}
+
+					await frameIoApiRequest.call(
 						this,
 						'PATCH',
-						`/v4/accounts/${accountId}/${resourceType}s/${resourceId}/metadata`,
-						buildDataBody({ metadata: parsedValues }),
+						`/v4/accounts/${accountId}/projects/${projectId}/metadata/values`,
+						buildDataBody({
+							file_ids: [fileId],
+							values,
+						}),
 					);
-					pushResponse(returnData, response, itemIndex);
+
+					returnData.push({
+						json: {
+							success: true,
+							fileId,
+							projectId,
+							updatedFields: values.map((value) => value.field_definition_id),
+						},
+						pairedItem: { item: itemIndex },
+					});
 					break;
 				}
 				case 'collection': {
 					const projectId = this.getNodeParameter('projectId', itemIndex) as string;
 					const collectionId = this.getNodeParameter('collectionId', itemIndex, '') as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'list') {
 						const collections = await handleList(
@@ -636,11 +691,7 @@ export async function executeFrameIo(
 				case 'customField': {
 					const projectId = this.getNodeParameter('projectId', itemIndex) as string;
 					const customFieldId = this.getNodeParameter('customFieldId', itemIndex, '') as string;
-					const additionalFields = this.getNodeParameter(
-						'additionalFields',
-						itemIndex,
-						{},
-					) as IDataObject;
+					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {});
 
 					if (operation === 'list') {
 						const fields = await handleList(

@@ -10,6 +10,7 @@ import { frameIoProperties } from './descriptions';
 import { executeFrameIo } from './FrameIoV1.execute';
 import {
 	getAccounts,
+	getMetadataFields,
 	getProjects,
 	getShares,
 	getWorkspaces,
@@ -52,6 +53,9 @@ export class FrameIoV1 implements INodeType {
 			getWorkspaces,
 			getProjects,
 			getShares,
+		},
+		resourceMapping: {
+			getMetadataFields,
 		},
 		listSearch: {
 			searchFolders,

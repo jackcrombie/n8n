@@ -39,6 +39,10 @@ export function routeMatchesProject(
 	return payload.project?.id === route.projectId;
 }
 
+export function isShareFolderScope(route: FrameIoFilterRoute): boolean {
+	return route.shareScope === 'folder_in_share' || route.shareScope === 'folder_in_share_subtree';
+}
+
 export function routeMatchesResourceScope(
 	route: FrameIoFilterRoute,
 	payload: FrameIoWebhookPayload,
@@ -57,11 +61,11 @@ export function routeMatchesResourceScope(
 
 	if (scopeType === 'share') {
 		const shareId = extractResourceLocatorValue(route.share);
-		if (!shareId) return true;
 		if (resourceType === 'share') {
-			return resourceId === shareId;
+			return !shareId || resourceId === shareId;
 		}
-		return false;
+		// Share membership of files, folders, and comments needs the API; checked in execute.
+		return !!shareId;
 	}
 
 	return true;
